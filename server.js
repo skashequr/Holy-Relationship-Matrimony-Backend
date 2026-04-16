@@ -11,7 +11,7 @@ const server = http.createServer(app);
 // ── Socket.io ──────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
-    origin: (process.env.FRONTEND_URL || 'http://localhost:3000' , 'https://hrm-m3eb26gga-sheikhs-projects-aa30c247.vercel.app' , 'https://hrmmm.com').split(',').map((o) => o.trim()),
+    origin: (process.env.FRONTEND_URL || 'http://localhost:3000' , 'https://hrm-m3eb26gga-sheikhs-projects-aa30c247.vercel.app' , 'https://hrmmm.com' , 'https://hrmmm.vercel.app').split(',').map((o) => o.trim()),
     methods: ['GET', 'POST'],
     credentials: true,
   },
