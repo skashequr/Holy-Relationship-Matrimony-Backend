@@ -78,12 +78,30 @@ if (isProd && allowedOrigins.length === 0) {
   throw new Error('FRONTEND_URL must be set in production');
 }
 
+// Derive project slug from the primary Vercel URL (e.g. "hrmmm" from hrmmm.vercel.app)
+// so every Vercel preview deployment for the same project is automatically allowed.
+const vercelProject = allowedOrigins
+  .map((o) => { try { return new URL(o).hostname; } catch { return ''; } })
+  .find((h) => h.endsWith('.vercel.app'))
+  ?.split('.')[0] || null;
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true; // no-origin: mobile / curl / server-to-server
+  if (allowedOrigins.includes(origin)) return true;
+  // Allow Vercel preview deployments: <project>-<hash>-<scope>.vercel.app
+  if (vercelProject && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) {
+    const slug = new URL(origin).hostname.split('.')[0];
+    if (slug.startsWith(vercelProject.slice(0, 4))) return true;
+  }
+  // Allow localhost in dev
+  if (!isProd && /^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
+  return false;
+};
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, curl, server-to-server)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
+      if (isAllowedOrigin(origin)) return callback(null, true);
       callback(new Error(`CORS: origin ${origin} not allowed`));
     },
     credentials: true,
