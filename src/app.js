@@ -70,7 +70,10 @@ app.use(
   })
 );
 
-// ── CORS — fail-close in production ───────────────────────────────────
+// ── CORS ───────────────────────────────────────────────────────────────
+// FRONTEND_URL may be a comma-separated list of allowed origins.
+// All *.vercel.app sub-domains are also allowed to support Vercel preview
+// deployments (each deployment gets a unique URL).
 const rawOrigins = process.env.FRONTEND_URL || (isProd ? '' : 'http://localhost:3000');
 const allowedOrigins = rawOrigins.split(',').map((o) => o.trim()).filter(Boolean);
 
@@ -78,22 +81,10 @@ if (isProd && allowedOrigins.length === 0) {
   throw new Error('FRONTEND_URL must be set in production');
 }
 
-// Derive project slug from the primary Vercel URL (e.g. "hrmmm" from hrmmm.vercel.app)
-// so every Vercel preview deployment for the same project is automatically allowed.
-const vercelProject = allowedOrigins
-  .map((o) => { try { return new URL(o).hostname; } catch { return ''; } })
-  .find((h) => h.endsWith('.vercel.app'))
-  ?.split('.')[0] || null;
-
 const isAllowedOrigin = (origin) => {
-  if (!origin) return true; // no-origin: mobile / curl / server-to-server
-  if (allowedOrigins.includes(origin)) return true;
-  // Allow Vercel preview deployments: <project>-<hash>-<scope>.vercel.app
-  if (vercelProject && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) {
-    const slug = new URL(origin).hostname.split('.')[0];
-    if (slug.startsWith(vercelProject.slice(0, 4))) return true;
-  }
-  // Allow localhost in dev
+  if (!origin) return true;                          // no-origin: curl / server-to-server
+  if (allowedOrigins.includes(origin)) return true;  // explicit list
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true; // any Vercel preview
   if (!isProd && /^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
   return false;
 };

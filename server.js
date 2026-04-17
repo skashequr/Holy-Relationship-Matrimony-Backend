@@ -9,24 +9,21 @@ const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
 
 // ── Socket.io ──────────────────────────────────────────────────────────
-const _rawOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
+const _allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
   .split(',').map((o) => o.trim()).filter(Boolean);
-const _vercelProject = _rawOrigins
-  .map((o) => { try { return new URL(o).hostname; } catch { return ''; } })
-  .find((h) => h.endsWith('.vercel.app'))?.split('.')[0] || null;
+
+const _isAllowed = (origin) => {
+  if (!origin) return true;
+  if (_allowedOrigins.includes(origin)) return true;
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true;
+  if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
+  return false;
+};
 
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (_rawOrigins.includes(origin)) return callback(null, true);
-      if (_vercelProject && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) {
-        const slug = new URL(origin).hostname.split('.')[0];
-        if (slug.startsWith(_vercelProject.slice(0, 4))) return callback(null, true);
-      }
-      if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost(:\d+)?$/.test(origin)) {
-        return callback(null, true);
-      }
+      if (_isAllowed(origin)) return callback(null, true);
       callback(new Error('Socket CORS: origin not allowed'));
     },
     credentials: true,
