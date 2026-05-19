@@ -41,15 +41,16 @@ router.post(
     body('gender').isIn(['male', 'female']).withMessage('Gender must be male or female'),
   ],
   async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+    const validationResult_ = validationResult(req);
+    if (!validationResult_.isEmpty()) {
+      return res.status(400).json({ success: false, errors: validationResult_.array() });
     }
-
+    console.log(5);
     const { name, email, phone, password, gender } = req.body;
+    
+    console.log(name, email, phone, password, gender);
 
     try {
-      // Check for duplicate email or phone — do this before sending OTP
       const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
       if (existingUser) {
         const field = existingUser.email === email ? 'email' : 'phone';
@@ -60,15 +61,11 @@ router.post(
         });
       }
 
-      // Generate OTP
       const otp = generateNumericOTP();
-      const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
-      // Delete any previous pending registration OTP for this email
       await OTP.deleteMany({ identifier: email, purpose: 'registration' });
 
-      // Store OTP with pending registration data in metadata.
-      // The user is NOT created here — creation happens only after OTP is verified.
       await OTP.create({
         identifier: email,
         type: 'email',
@@ -80,14 +77,14 @@ router.post(
 
       await sendOTPEmail(email, otp, 'registration');
 
-      res.status(200).json({
+      return res.status(200).json({
         success: true,
         message: 'OTP sent. Please verify your email to complete registration.',
         messageBn: 'OTP পাঠানো হয়েছে। নিবন্ধন সম্পন্ন করতে ইমেইল যাচাই করুন।',
       });
     } catch (error) {
       console.error(error);
-      res.status(500).json({ success: false, message: 'Server error', error: error.message });
+      return res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
   }
 );
