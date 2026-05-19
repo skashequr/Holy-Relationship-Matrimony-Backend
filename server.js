@@ -9,26 +9,54 @@ const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
 
 // ── Socket.io ──────────────────────────────────────────────────────────
-const _allowedOrigins = (process.env.FRONTEND_URL || 'https://www.holymarriagemedia.com,http://localhost:3000')
-  .split(',').map((o) => o.trim()).filter(Boolean);
+const allowedOrigins = (
+  process.env.FRONTEND_URL ||
+  'https://www.holymarriagemedia.com,http://localhost:3000,http://localhost:5173'
+)
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
 
-const _isAllowed = (origin) => {
+const isAllowed = (origin) => {
+  // allow Postman / server-side requests
   if (!origin) return true;
-  if (_allowedOrigins.includes(origin)) return true;
-  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true;
-  if (/^http:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true;
-  if (/^https:\/\/[a-z0-9-]+\.com$/.test(origin)) return true;
-  if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
+
+  // explicitly allowed domains
+  if (allowedOrigins.includes(origin)) return true;
+
+  // allow all Vercel preview deployments
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) {
+    return true;
+  }
+
+  // localhost during development
+  if (
+    process.env.NODE_ENV !== 'production' &&
+    /^http:\/\/localhost(:\d+)?$/.test(origin)
+  ) {
+    return true;
+  }
+
   return false;
 };
 
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      if (_isAllowed(origin)) return callback(null, true);
-      callback(new Error('Socket CORS: origin not allowed'));
+      if (isAllowed(origin)) {
+        callback(null, true);
+      } else {
+        console.log('Socket blocked by CORS:', origin);
+
+        callback(new Error(`Socket CORS blocked: ${origin}`));
+      }
     },
+
     credentials: true,
+
+    methods: ['GET', 'POST'],
+
+    allowedHeaders: ['Content-Type', 'Authorization'],
   },
 });
 

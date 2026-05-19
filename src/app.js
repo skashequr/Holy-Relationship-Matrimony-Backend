@@ -74,39 +74,58 @@ app.use(
 // FRONTEND_URL may be a comma-separated list of allowed origins.
 // All *.vercel.app sub-domains are also allowed to support Vercel preview
 // deployments (each deployment gets a unique URL).
-const rawOrigins = process.env.FRONTEND_URL || (isProd ? '' : 'https://www.holymarriagemedia.com,http://localhost:3000');
-const allowedOrigins = [
-  'https://www.holymarriagemedia.com',
-  'https://holymarriagemedia.com',
-  'http://localhost:3000',
-  'http://localhost:5173',
-];
+const rawOrigins =
+  process.env.FRONTEND_URL ||
+  (isProd
+    ? ''
+    : 'https://www.holymarriagemedia.com,http://localhost:3000,http://localhost:5173');
 
+const allowedOrigins = rawOrigins
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
 
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
+if (isProd && allowedOrigins.length === 0) {
+  throw new Error('FRONTEND_URL must be set in production');
+}
 
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS not allowed'));
-    }
-  },
-  credentials: true,
-}));
+const isAllowedOrigin = (origin) => {
+  // allow requests like Postman/server-to-server
+  if (!origin) return true;
+
+  // explicitly allowed origins
+  if (allowedOrigins.includes(origin)) return true;
+
+  // allow Vercel preview deployments
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) {
+    return true;
+  }
+
+  // localhost in development
+  if (!isProd && /^http:\/\/localhost(:\d+)?$/.test(origin)) {
+    return true;
+  }
+
+  return false;
+};
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (isAllowedOrigin(origin)) return callback(null, true);
-      callback(new Error(`CORS: origin ${origin} not allowed`));
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+      } else {
+        console.log('Blocked by CORS:', origin);
+
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      }
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
-    maxAge: 86400, // preflight cache 24h
   })
 );
+
 
 // ── Body parsing & sanitization ────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
