@@ -16,6 +16,8 @@ const _isAllowed = (origin) => {
   if (!origin) return true;
   if (_allowedOrigins.includes(origin)) return true;
   if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true;
+  if (/^http:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true;
+  if (/^https:\/\/[a-z0-9-]+\.com$/.test(origin)) return true;
   if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
   return false;
 };

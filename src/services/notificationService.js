@@ -66,6 +66,8 @@ const sendOTPEmail = async (email, otp, purpose) => {
     <!DOCTYPE html>
     <html>
     <head>
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2113556573683821"
+     crossorigin="anonymous"></script>
       <meta charset="UTF-8">
       <style>
         body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
