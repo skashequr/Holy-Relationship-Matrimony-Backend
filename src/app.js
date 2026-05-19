@@ -75,20 +75,26 @@ app.use(
 // All *.vercel.app sub-domains are also allowed to support Vercel preview
 // deployments (each deployment gets a unique URL).
 const rawOrigins = process.env.FRONTEND_URL || (isProd ? '' : 'https://www.holymarriagemedia.com,http://localhost:3000');
-const allowedOrigins = rawOrigins.split(',').map((o) => o.trim()).filter(Boolean);
+const allowedOrigins = [
+  'https://www.holymarriagemedia.com',
+  'https://holymarriagemedia.com',
+  'http://localhost:3000',
+  'http://localhost:5173',
+];
 
-if (isProd && allowedOrigins.length === 0) {
-  throw new Error('FRONTEND_URL must be set in production');
-}
 
-const isAllowedOrigin = (origin) => {
-  if (!origin) return true;                          // no-origin: curl / server-to-server
-  if (allowedOrigins.includes(origin)) return true;  // explicit list
-  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true; // any Vercel preview
-  if (!isProd && /^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
-  return false;
-};
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
 
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS not allowed'));
+    }
+  },
+  credentials: true,
+}));
 app.use(
   cors({
     origin: (origin, callback) => {
