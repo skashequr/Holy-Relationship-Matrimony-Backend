@@ -74,7 +74,7 @@ app.use(
 // FRONTEND_URL may be a comma-separated list of allowed origins.
 // All *.vercel.app sub-domains are also allowed to support Vercel preview
 // deployments (each deployment gets a unique URL).
-const rawOrigins = process.env.FRONTEND_URL || (isProd ? '' : 'http://localhost:3000');
+const rawOrigins = process.env.FRONTEND_URL || (isProd ? '' : 'https://www.holymarriagemedia.com,http://localhost:3000');
 const allowedOrigins = rawOrigins.split(',').map((o) => o.trim()).filter(Boolean);
 
 if (isProd && allowedOrigins.length === 0) {
