@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "17ae8cf9-744f-45b5-9054-6e0dd2bfb34d"
+      }
+    },
+    "android": {
+      "package": "com.asheq.holymatrimonybackend"
+    }
+  }
+}

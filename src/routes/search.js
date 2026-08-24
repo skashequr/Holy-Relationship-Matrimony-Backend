@@ -3,16 +3,24 @@ const router = express.Router();
 
 const Biodata = require('../models/Biodata');
 const User = require('../models/User');
-const { protect } = require('../middleware/auth');
+const { optionalAuth } = require('../middleware/auth');
 const { searchLimiter } = require('../middleware/rateLimiter');
 const { sanitizeBiodata } = require('../services/matchService');
 
 // @route  GET /api/search
-// @desc   Search and filter biodata profiles
-// @access Private
-router.get('/', protect, searchLimiter, async (req, res) => {
+// @desc   Search and filter biodata profiles. Logged-in users default to the
+//         opposite-gender pool personalized to them; guests get an
+//         unpersonalized preview (both genders, full details still locked
+//         by sanitizeBiodata) so they can browse before creating an account.
+//         An explicit `gender` param (male/female) overrides the default for
+//         anyone, logged in or not. A `biodataNumber` param does a direct
+//         lookup by biodata number, skipping the gender pool entirely.
+// @access Public (optional auth)
+router.get('/', optionalAuth, searchLimiter, async (req, res) => {
   try {
     const {
+      gender,
+      biodataNumber,
       ageMin,
       ageMax,
       heightMin,
@@ -41,10 +49,24 @@ router.get('/', protect, searchLimiter, async (req, res) => {
     // Build query
     const query = { status: 'approved', isActive: true };
 
-    // Only show opposite gender profiles
-    const targetGender = req.user.gender === 'male' ? 'female' : 'male';
-    const targetUsers = await User.find({ gender: targetGender, isActive: true, isBanned: false }).select('_id');
-    query.userId = { $in: targetUsers.map((u) => u._id) };
+    // Searching by biodata number is a direct lookup — anyone (including
+    // guests) can look up a specific profile this way, so skip the
+    // gender-pool restriction below.
+    if (biodataNumber) {
+      query.biodataNumber = { $regex: `^${escapeRegex(biodataNumber.trim())}`, $options: 'i' };
+    } else {
+      // An explicit gender choice (from a guest or a logged-in user) wins;
+      // otherwise logged-in users default to the opposite gender, and
+      // guests without a preference see both genders.
+      const genderFilter = { isActive: true, isBanned: false };
+      if (gender === 'male' || gender === 'female') {
+        genderFilter.gender = gender;
+      } else if (req.user) {
+        genderFilter.gender = req.user.gender === 'male' ? 'female' : 'male';
+      }
+      const targetUsers = await User.find(genderFilter).select('_id');
+      query.userId = { $in: targetUsers.map((u) => u._id) };
+    }
 
     // Age filter
     if (ageMin || ageMax) {
@@ -122,7 +144,7 @@ router.get('/', protect, searchLimiter, async (req, res) => {
       Biodata.countDocuments(query),
     ]);
 
-    const viewer = await User.findById(req.user._id);
+    const viewer = req.user ? await User.findById(req.user._id) : null;
 
     const sanitizedBiodatas = biodatas.map((b) => sanitizeBiodata(b, viewer));
 

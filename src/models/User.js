@@ -115,6 +115,28 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    isFaceVerified: {
+      type: Boolean,
+      default: false,
+    },
+    faceVerificationPhoto: {
+      type: String,
+      default: null,
+    },
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    referralPoints: {
+      type: Number,
+      default: 0,
+    },
     preferredLanguage: {
       type: String,
       enum: ['bn', 'en'],
@@ -126,10 +148,13 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Encrypt password before saving
+// Auto-generate referral code if missing
 userSchema.pre('save', async function (next) {
+  if (!this.referralCode) {
+    const crypto = require('crypto');
+    this.referralCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+  }
   if (!this.isModified('password')) return next();
-  // Skip if caller already hashed (e.g. password reset route)
   if (this.$locals?.passwordAlreadyHashed) return next();
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);

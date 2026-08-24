@@ -66,13 +66,14 @@ router.post(
 
       await OTP.deleteMany({ identifier: email, purpose: 'registration' });
 
+      const { referralCode: refCode } = req.body;
       await OTP.create({
         identifier: email,
         type: 'email',
         otp: await bcrypt.hash(otp, 8),
         purpose: 'registration',
         expiresAt: otpExpiry,
-        metadata: { name, email, phone, password, gender },
+        metadata: { name, email, phone, password, gender, referralCode: refCode || null },
       });
 
       await sendOTPEmail(email, otp, 'registration');
@@ -131,20 +132,12 @@ router.post(
       const refreshToken = generateRefreshToken(user._id);
       await User.findByIdAndUpdate(user._id, { refreshToken });
 
-      // Set refresh token in httpOnly cookie
-      res.cookie('refreshToken', refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-        path: '/',
-      });
-
       res.json({
         success: true,
         message: 'Login successful.',
         messageBn: 'লগইন সফল।',
         token,
+        refreshToken,
         user: {
           _id: user._id,
           name: user.name,
@@ -252,9 +245,9 @@ router.post('/verify-otp', async (req, res) => {
 
     // For registration: create the user NOW (after OTP verified), return token
     if (purpose === 'registration' && otpRecord.metadata) {
-      const { name, email: regEmail, phone, password, gender } = otpRecord.metadata;
+      const { name, email: regEmail, phone, password, gender, referralCode: incomingRef } = otpRecord.metadata;
 
-      // Final duplicate check (edge case: two tabs submitting same email simultaneously)
+      // Final duplicate check
       const alreadyExists = await User.findOne({ $or: [{ email: regEmail }, { phone }] });
       if (alreadyExists) {
         return res.status(400).json({
@@ -264,6 +257,16 @@ router.post('/verify-otp', async (req, res) => {
         });
       }
 
+      // Resolve referrer
+      let referredBy = null;
+      if (incomingRef) {
+        const referrer = await User.findOne({ referralCode: incomingRef.toUpperCase() });
+        if (referrer) referredBy = referrer._id;
+      }
+
+      // Generate unique referral code for new user
+      const newCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+
       const newUser = await User.create({
         name,
         email: regEmail,
@@ -271,25 +274,26 @@ router.post('/verify-otp', async (req, res) => {
         password,
         gender,
         isEmailVerified: true,
+        referralCode: newCode,
+        referredBy,
       });
+
+      // Track referral record (pending until biodata approved)
+      if (referredBy) {
+        const Referral = require('../models/Referral');
+        await Referral.create({ referrerId: referredBy, referredUserId: newUser._id }).catch(() => {});
+      }
 
       const token = generateAccessToken(newUser._id);
       const refreshToken = generateRefreshToken(newUser._id);
       await User.findByIdAndUpdate(newUser._id, { refreshToken });
-
-      res.cookie('refreshToken', refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-        path: '/',
-      });
 
       return res.json({
         success: true,
         message: 'Email verified. Registration complete.',
         messageBn: 'ইমেইল যাচাই সফল। নিবন্ধন সম্পন্ন হয়েছে!',
         token,
+        refreshToken,
         user: {
           _id: newUser._id,
           name: newUser.name,
@@ -432,7 +436,7 @@ router.post('/logout', protect, async (req, res) => {
 // @desc   Refresh access token using refresh token from cookie
 // @access Public
 router.post('/refresh-token', async (req, res) => {
-  const refreshToken = req.cookies?.refreshToken;
+  const refreshToken = req.body.refreshToken || req.cookies?.refreshToken;
   if (!refreshToken) {
     return res.status(401).json({ success: false, message: 'No refresh token provided.' });
   }

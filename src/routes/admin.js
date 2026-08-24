@@ -7,8 +7,12 @@ const Payment = require('../models/Payment');
 const Report = require('../models/Report');
 const Review = require('../models/Review');
 const Settings = require('../models/Settings');
+const Notification = require('../models/Notification');
+const RuqyahSlot = require('../models/RuqyahSlot');
+const RuqyahBooking = require('../models/RuqyahBooking');
+const Referral = require('../models/Referral');
 const { protect, adminOnly } = require('../middleware/auth');
-const { sendBiodataStatusEmail, createNotification } = require('../services/notificationService');
+const { sendBiodataStatusEmail, createNotification, sendEmail } = require('../services/notificationService');
 
 // All admin routes require authentication and admin role
 router.use(protect, adminOnly);
@@ -122,7 +126,7 @@ router.get('/analytics', async (req, res) => {
 
 // ===== USER MANAGEMENT =====
 // @route  GET /api/admin/users
-router.get('/users', async (req, res) => {
+router.get('/users', protect, adminOnly, async (req, res) => {
   try {
     const { page = 1, limit = 20, search, gender, status, verified, ageMin, ageMax } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
@@ -151,7 +155,7 @@ router.get('/users', async (req, res) => {
     const [users, total] = await Promise.all([
       User.find(query)
         .select('-password -resetPasswordToken -emailVerificationToken')
-        .populate('biodataId', 'biodataNumber status personal.fullName personal.age')
+        .populate('biodataId', '_id biodataNumber status personal')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(Number(limit)),
@@ -164,6 +168,7 @@ router.get('/users', async (req, res) => {
       pagination: { total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / Number(limit)) },
     });
   } catch (error) {
+    console.error('GET /api/admin/users error:', error.message);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -221,6 +226,39 @@ router.put('/users/:id/verify', async (req, res) => {
   }
 });
 
+// ===== NOTIFICATIONS =====
+// @route  POST /api/admin/notifications/broadcast
+router.post('/notifications/broadcast', async (req, res) => {
+  try {
+    const { title, titleBn, message, messageBn, link, type = 'system' } = req.body;
+    if (!title || !message) {
+      return res.status(400).json({ success: false, message: 'Title and message are required.' });
+    }
+
+    const users = await User.find({ role: 'user' }).select('_id');
+    if (!users.length) {
+      return res.json({ success: true, message: 'No users found to notify.' });
+    }
+
+    const notifications = users.map((user) => ({
+      userId: user._id,
+      type,
+      title,
+      titleBn,
+      message,
+      messageBn,
+      link,
+    }));
+
+    await Notification.insertMany(notifications);
+
+    res.json({ success: true, message: 'Notification sent to all users.', count: notifications.length });
+  } catch (error) {
+    console.error('POST /api/admin/notifications/broadcast error:', error.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // ===== BIODATA MANAGEMENT =====
 // @route  GET /api/admin/biodatas
 router.get('/biodatas', async (req, res) => {
@@ -261,6 +299,18 @@ router.get('/biodatas', async (req, res) => {
   }
 });
 
+// @route  GET /api/admin/biodatas/:id
+router.get('/biodatas/:id', async (req, res) => {
+  try {
+    const biodata = await Biodata.findById(req.params.id)
+      .populate('userId', 'name email gender phone profilePicture isVerified');
+    if (!biodata) return res.status(404).json({ success: false, message: 'Biodata not found.' });
+    res.json({ success: true, biodata });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // @route  PUT /api/admin/biodatas/:id/approve
 router.put('/biodatas/:id/approve', async (req, res) => {
   try {
@@ -279,6 +329,31 @@ router.put('/biodatas/:id/approve', async (req, res) => {
     });
 
     await sendBiodataStatusEmail(biodata.userId.email, biodata.userId.name, 'approved');
+
+    // Referral reward: give 10 points to referrer if pending
+    try {
+      const referral = await Referral.findOne({ referredUserId: biodata.userId._id, status: 'pending' });
+      if (referral) {
+        const POINTS_PER_REFERRAL = 10;
+        await User.findByIdAndUpdate(referral.referrerId, { $inc: { referralPoints: POINTS_PER_REFERRAL } });
+        await Referral.findByIdAndUpdate(referral._id, {
+          status: 'rewarded',
+          pointsAwarded: POINTS_PER_REFERRAL,
+          rewardedAt: new Date(),
+        });
+        await createNotification({
+          userId: referral.referrerId,
+          type: 'system',
+          title: 'Referral Reward',
+          titleBn: 'রেফারেল পুরস্কার',
+          message: `You earned ${POINTS_PER_REFERRAL} points! Your referral's biodata was approved.`,
+          messageBn: `অভিনন্দন! আপনার রেফার করা ব্যক্তির বায়োডেটা অনুমোদিত হয়েছে। আপনি ${POINTS_PER_REFERRAL} পয়েন্ট পেয়েছেন।`,
+          link: '/referral',
+        });
+      }
+    } catch (refErr) {
+      console.error('Referral reward error:', refErr.message);
+    }
 
     res.json({ success: true, message: 'Biodata approved.' });
   } catch (error) {
@@ -720,6 +795,325 @@ router.put('/settings', async (req, res) => {
         .map(([k, v]) => Settings.set(k, v))
     );
     res.json({ success: true, message: 'Settings updated.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ===== EMAIL CAMPAIGNS =====
+
+// @route  POST /api/admin/email/no-biodata
+// @desc   Send reminder email to all users who haven't created a biodata yet
+router.post('/email/no-biodata', async (req, res) => {
+  try {
+    const users = await User.find({
+      role: 'user',
+      biodataId: null,
+      isActive: true,
+      isBanned: false,
+    }).select('name email');
+
+    if (!users.length) {
+      return res.json({ success: true, message: 'No users without biodata found.', count: 0 });
+    }
+
+    const emailHtml = (name) => `
+      <!DOCTYPE html><html><head><meta charset="UTF-8">
+      <style>
+        body{font-family:Arial,sans-serif;background:#f4f4f4;margin:0;padding:20px}
+        .wrap{max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden}
+        .head{background:linear-gradient(135deg,#1a5276,#2e86c1);padding:30px;text-align:center}
+        .head h1{color:#fff;margin:0;font-size:22px}
+        .head p{color:#cce4ff;margin:6px 0 0}
+        .body{padding:30px}
+        .btn{display:inline-block;margin-top:20px;padding:14px 32px;background:#c9a84c;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-size:15px}
+        .foot{background:#f4f4f4;padding:16px;text-align:center;font-size:12px;color:#888}
+      </style></head>
+      <body><div class="wrap">
+        <div class="head"><h1>Holy Relationship Matrimony</h1><p>হোলি রিলেশনশিপ ম্যাট্রিমনি</p></div>
+        <div class="body">
+          <p>প্রিয় <strong>${name}</strong>,</p>
+          <p>আপনি আমাদের প্ল্যাটফর্মে নিবন্ধন করেছেন কিন্তু এখনো আপনার <strong>বায়োডেটা</strong> তৈরি করেননি।</p>
+          <p>বায়োডেটা না থাকলে সম্ভাব্য পাত্র/পাত্রী আপনাকে খুঁজে পাবেন না। আজই আপনার বায়োডেটা তৈরি করুন এবং আপনার স্বপ্নের সঙ্গী খুঁজে নিন।</p>
+          <p style="margin-top:10px">বায়োডেটা তৈরি করতে মাত্র ১০ মিনিট সময় লাগে।</p>
+          <a href="https://www.holymarriagemedia.com/biodata/create" class="btn">এখনই বায়োডেটা তৈরি করুন</a>
+        </div>
+        <div class="foot">© Holy Relationship Matrimony — Bangladesh Islamic Matrimony Service</div>
+      </div></body></html>
+    `;
+
+    let sent = 0;
+    for (const user of users) {
+      const result = await sendEmail({
+        to: user.email,
+        subject: '[Holy Matrimony] আপনার বায়োডেটা তৈরি করুন',
+        html: emailHtml(user.name),
+      });
+      if (result.success) sent++;
+    }
+
+    res.json({ success: true, message: `${sent} জনকে ইমেইল পাঠানো হয়েছে।`, count: sent, total: users.length });
+  } catch (error) {
+    console.error('POST /admin/email/no-biodata error:', error.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  POST /api/admin/email/custom
+// @desc   Send custom email to a target group
+router.post('/email/custom', async (req, res) => {
+  try {
+    const { subject, message, target } = req.body;
+    if (!subject || !message || !target) {
+      return res.status(400).json({ success: false, message: 'subject, message এবং target দিতে হবে।' });
+    }
+
+    let recipients = [];
+
+    if (target === 'pending' || target === 'rejected') {
+      const biodatas = await Biodata.find({ status: target })
+        .populate('userId', 'name email isBanned isActive');
+      recipients = biodatas
+        .filter(b => b.userId && !b.userId.isBanned && b.userId.isActive)
+        .map(b => ({ name: b.userId.name, email: b.userId.email }));
+    } else if (target === 'all') {
+      recipients = await User.find({ role: 'user', isActive: true, isBanned: false }).select('name email');
+    }
+
+    if (!recipients.length) {
+      return res.json({ success: true, message: 'কোনো প্রাপক পাওয়া যায়নি।', count: 0 });
+    }
+
+    const emailHtml = (name, msg) => `
+      <!DOCTYPE html><html><head><meta charset="UTF-8">
+      <style>
+        body{font-family:Arial,sans-serif;background:#f4f4f4;margin:0;padding:20px}
+        .wrap{max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden}
+        .head{background:linear-gradient(135deg,#1a5276,#2e86c1);padding:30px;text-align:center}
+        .head h1{color:#fff;margin:0;font-size:22px}
+        .head p{color:#cce4ff;margin:6px 0 0}
+        .body{padding:30px;line-height:1.7;color:#333}
+        .msg{background:#f8f9fa;border-left:4px solid #1a5276;padding:16px;border-radius:0 8px 8px 0;white-space:pre-wrap}
+        .foot{background:#f4f4f4;padding:16px;text-align:center;font-size:12px;color:#888}
+      </style></head>
+      <body><div class="wrap">
+        <div class="head"><h1>Holy Relationship Matrimony</h1><p>হোলি রিলেশনশিপ ম্যাট্রিমনি</p></div>
+        <div class="body">
+          <p>প্রিয় <strong>${name}</strong>,</p>
+          <div class="msg">${msg.replace(/\n/g, '<br>')}</div>
+          <p style="margin-top:20px">ধন্যবাদ,<br><strong>Holy Relationship Matrimony Team</strong></p>
+        </div>
+        <div class="foot">© Holy Relationship Matrimony — Bangladesh Islamic Matrimony Service</div>
+      </div></body></html>
+    `;
+
+    let sent = 0;
+    for (const user of recipients) {
+      const result = await sendEmail({
+        to: user.email,
+        subject,
+        html: emailHtml(user.name, message),
+      });
+      if (result.success) sent++;
+    }
+
+    res.json({ success: true, message: `${sent} জনকে ইমেইল পাঠানো হয়েছে।`, count: sent, total: recipients.length });
+  } catch (error) {
+    console.error('POST /admin/email/custom error:', error.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ===== REFERRAL MANAGEMENT =====
+// ═══════════════════════════════════════════════════════════════
+
+// @route  GET /api/admin/referrals
+router.get('/referrals', async (req, res) => {
+  try {
+    const { status, page = 1, limit = 30 } = req.query;
+    const filter = {};
+    if (status && status !== 'all') filter.status = status;
+
+    const skip = (Number(page) - 1) * Number(limit);
+    const [referrals, total, totalPoints] = await Promise.all([
+      Referral.find(filter)
+        .populate('referrerId', 'name email referralCode referralPoints')
+        .populate('referredUserId', 'name email createdAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit)),
+      Referral.countDocuments(filter),
+      Referral.aggregate([
+        { $match: { status: 'rewarded' } },
+        { $group: { _id: null, total: { $sum: '$pointsAwarded' } } },
+      ]),
+    ]);
+
+    res.json({
+      success: true,
+      referrals,
+      total,
+      totalPointsAwarded: totalPoints[0]?.total || 0,
+      page: Number(page),
+      pages: Math.ceil(total / Number(limit)),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  GET /api/admin/referrals/leaderboard
+router.get('/referrals/leaderboard', async (req, res) => {
+  try {
+    const top = await User.find({ referralPoints: { $gt: 0 } })
+      .select('name email referralCode referralPoints')
+      .sort({ referralPoints: -1 })
+      .limit(20);
+    res.json({ success: true, leaderboard: top });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ===== RUQYAH MANAGEMENT =====
+// ═══════════════════════════════════════════════════════════════
+
+// @route  GET /api/admin/ruqyah/slots
+router.get('/ruqyah/slots', async (req, res) => {
+  try {
+    const slots = await RuqyahSlot.find().sort({ date: 1, time: 1 });
+    res.json({ success: true, slots });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  POST /api/admin/ruqyah/slots
+router.post('/ruqyah/slots', async (req, res) => {
+  try {
+    const { date, time, capacity, note } = req.body;
+    if (!date || !time) {
+      return res.status(400).json({ success: false, messageBn: 'তারিখ ও সময় দিতে হবে।' });
+    }
+    const slot = await RuqyahSlot.create({ date, time, capacity: capacity || 1, note: note || '' });
+    res.status(201).json({ success: true, slot });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  DELETE /api/admin/ruqyah/slots/:id
+router.delete('/ruqyah/slots/:id', async (req, res) => {
+  try {
+    const slot = await RuqyahSlot.findByIdAndDelete(req.params.id);
+    if (!slot) return res.status(404).json({ success: false, messageBn: 'স্লট পাওয়া যায়নি।' });
+    // Also cancel related bookings
+    await RuqyahBooking.updateMany({ slotId: req.params.id, status: 'pending' }, { status: 'cancelled' });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  PATCH /api/admin/ruqyah/slots/:id/toggle
+router.patch('/ruqyah/slots/:id/toggle', async (req, res) => {
+  try {
+    const slot = await RuqyahSlot.findById(req.params.id);
+    if (!slot) return res.status(404).json({ success: false, messageBn: 'স্লট পাওয়া যায়নি।' });
+    slot.isActive = !slot.isActive;
+    await slot.save();
+    res.json({ success: true, slot });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  GET /api/admin/ruqyah/bookings
+router.get('/ruqyah/bookings', async (req, res) => {
+  try {
+    const { status, page = 1, limit = 20 } = req.query;
+    const filter = {};
+    if (status && status !== 'all') filter.status = status;
+
+    const skip = (Number(page) - 1) * Number(limit);
+    const [bookings, total] = await Promise.all([
+      RuqyahBooking.find(filter)
+        .populate('userId', 'name email phone')
+        .populate('slotId', 'date time note')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit)),
+      RuqyahBooking.countDocuments(filter),
+    ]);
+
+    res.json({ success: true, bookings, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  PATCH /api/admin/ruqyah/bookings/:id/confirm
+router.patch('/ruqyah/bookings/:id/confirm', async (req, res) => {
+  try {
+    const booking = await RuqyahBooking.findByIdAndUpdate(
+      req.params.id,
+      { status: 'confirmed' },
+      { new: true }
+    ).populate('slotId', 'date time');
+    if (!booking) return res.status(404).json({ success: false, messageBn: 'বুকিং পাওয়া যায়নি।' });
+    res.json({ success: true, booking });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  PATCH /api/admin/ruqyah/bookings/:id/cancel
+router.patch('/ruqyah/bookings/:id/cancel', async (req, res) => {
+  try {
+    const booking = await RuqyahBooking.findById(req.params.id);
+    if (!booking) return res.status(404).json({ success: false, messageBn: 'বুকিং পাওয়া যায়নি।' });
+
+    if (booking.status !== 'cancelled') {
+      booking.status = 'cancelled';
+      await booking.save();
+      // Decrement slot count
+      await RuqyahSlot.findByIdAndUpdate(booking.slotId, { $inc: { bookedCount: -1 } });
+    }
+    res.json({ success: true, booking });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  PATCH /api/admin/ruqyah/bookings/:id/payment
+router.patch('/ruqyah/bookings/:id/payment', async (req, res) => {
+  try {
+    const { paymentStatus } = req.body;
+    const booking = await RuqyahBooking.findByIdAndUpdate(
+      req.params.id,
+      { paymentStatus },
+      { new: true }
+    );
+    if (!booking) return res.status(404).json({ success: false, messageBn: 'বুকিং পাওয়া যায়নি।' });
+    res.json({ success: true, booking });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// @route  PATCH /api/admin/ruqyah/bookings/:id/note
+router.patch('/ruqyah/bookings/:id/note', async (req, res) => {
+  try {
+    const { adminNote } = req.body;
+    const booking = await RuqyahBooking.findByIdAndUpdate(
+      req.params.id,
+      { adminNote: adminNote || '' },
+      { new: true }
+    );
+    if (!booking) return res.status(404).json({ success: false, messageBn: 'বুকিং পাওয়া যায়নি।' });
+    res.json({ success: true, booking });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Server error' });
   }

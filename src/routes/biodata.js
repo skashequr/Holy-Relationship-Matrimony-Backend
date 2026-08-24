@@ -220,22 +220,37 @@ router.get('/:id', protect, async (req, res) => {
     }
 
     if (!biodata) {
+      console.log('❌ Biodata not found for id:', req.params.id);
       return res.status(404).json({ success: false, message: 'Biodata not found.' });
     }
 
-    if (biodata.status !== 'approved' && biodata.userId._id.toString() !== req.user._id.toString()) {
+    if (!biodata.userId) {
+      console.log('❌ Biodata userId not populated for biodata:', biodata._id);
+      return res.status(500).json({ success: false, message: 'Biodata data error.' });
+    }
+
+    console.log('✅ Found biodata:', biodata._id, 'status:', biodata.status, 'userId:', biodata.userId._id);
+
+    // Admins can view all biodatas, others can only view approved or their own
+    if (biodata.status !== 'approved' && biodata.userId._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'This biodata is not publicly available.' });
     }
 
     // Fetch viewer to check unlock status
     const viewer = await User.findById(req.user._id);
+    if (!viewer) {
+      console.log('❌ Viewer not found:', req.user._id);
+      return res.status(401).json({ success: false, message: 'User not found.' });
+    }
 
-    // Gender rule: only bypass if viewer has already paid/unlocked this profile
+    // Gender rule: only bypass if viewer has already paid/unlocked this profile or is admin
     const biodataGender = biodata.userId.gender;
-    const viewerGender = req.user.gender;
+    const viewerGender = viewer.gender;
     const hasUnlocked = viewer.hasUnlockedContact(biodata.userId._id);
 
-    if (biodataGender === viewerGender && !hasUnlocked && req.user.role !== 'admin') {
+    console.log('Gender check:', { biodataGender, viewerGender, hasUnlocked, isAdmin: viewer.role === 'admin' });
+
+    if (biodataGender === viewerGender && !hasUnlocked && viewer.role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'You can only view profiles of the opposite gender.',
@@ -259,7 +274,8 @@ router.get('/:id', protect, async (req, res) => {
 
     res.json({ success: true, biodata: sanitized });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('GET /api/biodata/:id error:', error.message);
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 });
 

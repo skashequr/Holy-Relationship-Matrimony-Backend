@@ -19,6 +19,8 @@ const userRoutes = require('./routes/user');
 const interestRoutes = require('./routes/interest');
 const messageRoutes = require('./routes/message');
 const reviewRoutes = require('./routes/review');
+const ruqyahRoutes = require('./routes/ruqyah');
+const referralRoutes = require('./routes/referral');
 const { apiLimiter } = require('./middleware/rateLimiter');
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -96,6 +98,11 @@ const isAllowedOrigin = (origin) => {
   // explicitly allowed origins
   if (allowedOrigins.includes(origin)) return true;
 
+  // allow www <-> non-www variants of any explicitly allowed origin
+  const withoutWww = origin.replace('://www.', '://');
+  const withWww = origin.replace('://', '://www.');
+  if (allowedOrigins.includes(withoutWww) || allowedOrigins.includes(withWww)) return true;
+
   // allow Vercel preview deployments
   if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) {
     return true;
@@ -161,6 +168,8 @@ app.use('/api/user', userRoutes);
 app.use('/api/interests', interestRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/ruqyah', ruqyahRoutes);
+app.use('/api/referral', referralRoutes);
 
 // ── Health check ───────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
