@@ -10,15 +10,15 @@ const {
   initiateBkashPayment,
   executeBkashPayment,
   initiateNagadPayment,
-  processContactUnlock,
   verifyPayment,
 } = require('../services/paymentService');
+const { trackServerPurchase } = require('../services/analyticsService');
 
 // @route  POST /api/payment/initiate
 // @desc   Initiate payment to unlock contact
 // @access Private
 router.post('/initiate', protect, async (req, res) => {
-  const { targetUserId, paymentMethod, payerPhone } = req.body;
+  const { targetUserId, paymentMethod, payerPhone, clientId } = req.body;
 
   if (!targetUserId || !paymentMethod) {
     return res.status(400).json({ success: false, message: 'targetUserId and paymentMethod are required.' });
@@ -76,7 +76,7 @@ router.post('/initiate', protect, async (req, res) => {
       paymentType: 'contact_unlock',
       status: 'pending',
       payerPhone,
-      metadata: { orderId, ...paymentData },
+      metadata: { orderId, gaClientId: clientId || null, ...paymentData },
     });
 
     res.json({
@@ -93,13 +93,17 @@ router.post('/initiate', protect, async (req, res) => {
 });
 
 // @route  POST /api/payment/verify-bkash
-// @desc   Verify bKash payment after redirect
+// @desc   Verify bKash payment after redirect. The client only tells us
+//         which pending payment to check — whether it actually succeeded is
+//         decided by calling bKash's execute API ourselves, never by
+//         trusting a client-supplied "status" field (that was previously
+//         enough to unlock any contact for free without paying).
 // @access Private
 router.post('/verify-bkash', protect, async (req, res) => {
-  const { paymentID, status, paymentDbId } = req.body;
+  const { paymentDbId } = req.body;
 
-  if (status !== 'success') {
-    return res.status(400).json({ success: false, message: 'Payment was not successful.' });
+  if (!paymentDbId) {
+    return res.status(400).json({ success: false, message: 'paymentDbId is required.' });
   }
 
   try {
@@ -107,21 +111,57 @@ router.post('/verify-bkash', protect, async (req, res) => {
     if (!payment || payment.payerId.toString() !== req.user._id.toString()) {
       return res.status(404).json({ success: false, message: 'Payment record not found.' });
     }
+    if (payment.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'This payment has already been processed.' });
+    }
 
-    // In production, verify with bKash API using stored token
-    // For now, mark as completed
-    const result = await processContactUnlock({
-      payerId: req.user._id,
-      targetUserId: payment.targetUserId,
-      paymentMethod: 'bkash',
-      payerPhone: payment.payerPhone,
-      gatewayData: { transactionId: paymentID, gatewayTransactionId: paymentID },
+    const { paymentID: bkashPaymentID, token } = payment.metadata || {};
+    if (!bkashPaymentID || !token) {
+      return res.status(400).json({ success: false, message: 'Payment session is invalid.' });
+    }
+
+    // Authoritative check — ask bKash directly whether this payment
+    // succeeded, using the token issued to us at /initiate, not anything
+    // supplied by the client.
+    const result = await executeBkashPayment({ paymentID: bkashPaymentID, token });
+    if (!result.success) {
+      payment.status = 'failed';
+      payment.gatewayResponse = result.data || { error: result.error };
+      await payment.save();
+      return res.status(400).json({
+        success: false,
+        message: 'Payment was not successful.',
+        messageBn: 'পেমেন্ট সফল হয়নি।',
+      });
+    }
+
+    payment.status = 'completed';
+    payment.transactionId = result.transactionId;
+    payment.gatewayTransactionId = result.transactionId;
+    payment.gatewayResponse = result.data;
+    await payment.save();
+
+    await User.findByIdAndUpdate(payment.payerId, {
+      $push: {
+        unlockedContacts: {
+          userId: payment.targetUserId,
+          unlockedAt: new Date(),
+          paymentId: payment._id,
+        },
+      },
     });
 
-    await Payment.findByIdAndUpdate(paymentDbId, {
-      status: 'completed',
-      gatewayTransactionId: paymentID,
+    // A real gateway just confirmed this one, so it's safe to always report
+    // it as a conversion — unlike the manual-TrxID and admin-approval paths,
+    // which stay gated behind the autoTrackConversions setting.
+    trackServerPurchase({
+      clientId: payment.metadata?.gaClientId,
+      transactionId: result.transactionId,
+      value: payment.amount,
+      currency: payment.currency,
     });
+    payment.adConversionTrackedAt = new Date();
+    await payment.save();
 
     res.json({
       success: true,
@@ -137,7 +177,7 @@ router.post('/verify-bkash', protect, async (req, res) => {
 // @desc   Manual payment verification (Rocket / manual TrxID submission)
 // @access Private
 router.post('/manual-verify', protect, async (req, res) => {
-  const { targetUserId, paymentMethod, transactionId, payerPhone } = req.body;
+  const { targetUserId, paymentMethod, transactionId, payerPhone, clientId } = req.body;
 
   // ── 1. Input validation ──────────────────────────────────────────────────
   if (!targetUserId || !paymentMethod || !transactionId || !payerPhone) {
@@ -209,6 +249,7 @@ router.post('/manual-verify', protect, async (req, res) => {
       status: 'pending',
       transactionId: transactionId.trim(),
       payerPhone: payerPhone.trim(),
+      metadata: { gaClientId: clientId || null },
     });
 
     res.json({

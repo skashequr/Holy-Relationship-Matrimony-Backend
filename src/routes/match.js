@@ -3,15 +3,28 @@ const router = express.Router();
 
 const User = require('../models/User');
 const Biodata = require('../models/Biodata');
+const { getDashboardSummary } = require('../services/dashboardService');
 const { protect } = require('../middleware/auth');
 const { getRecommendedMatches, sanitizeBiodata, calculateProfileCompleteness } = require('../services/matchService');
+
+// Personal dashboard overview; never accept a user id from the client.
+router.get('/dashboard', protect, async (req, res) => {
+  try {
+    res.json({ success: true, ...await getDashboardSummary(req.user) });
+  } catch {
+    res.status(500).json({ success: false, messageBn: 'ড্যাশবোর্ডের তথ্য পাওয়া যায়নি। আবার চেষ্টা করুন।' });
+  }
+});
 
 // @route  GET /api/match/recommended
 // @desc   Get recommended matches
 // @access Private
 router.get('/recommended', protect, async (req, res) => {
   try {
-    const { page = 1, limit = 12, minScore = 0 } = req.query;
+    const rawPage = Number(req.query.page);
+    const page = Number.isFinite(rawPage) ? Math.max(1, Math.floor(rawPage) || 1) : 1;
+    const limit = Math.min(50, Math.max(1, Math.floor(Number(req.query.limit) || 12)));
+    const minScore = Math.min(100, Math.max(0, Number(req.query.minScore) || 0));
     const result = await getRecommendedMatches(
       req.user._id,
       Number(limit),
@@ -68,6 +81,7 @@ router.get('/new-profiles', protect, async (req, res) => {
       userId: { $in: targetUsers.map((u) => u._id) },
       status: 'approved',
       isActive: true,
+      isMarried: { $ne: true },
     })
       .populate('userId', 'name gender profilePicture isVerified verificationBadge')
       .sort({ createdAt: -1 })
@@ -91,6 +105,7 @@ router.get('/profile-completeness', protect, async (req, res) => {
     if (!biodata) {
       return res.json({
         success: true,
+        biodata: null,
         percentage: 0,
         sections: [],
         suggestions: [{ section: 'বায়োডেটা', field: 'বায়োডেটা তৈরি করুন', pts: 100 }],
@@ -99,7 +114,11 @@ router.get('/profile-completeness', protect, async (req, res) => {
       });
     }
     const result = calculateProfileCompleteness(biodata, req.user.gender);
-    res.json({ success: true, ...result });
+    res.json({ success: true, ...result, biodata: {
+      _id: biodata._id, status: biodata.status, isActive: biodata.isActive,
+      isMarried: biodata.isMarried, biodataNumber: biodata.biodataNumber,
+      rejectionReason: biodata.rejectionReason,
+    } });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Server error' });
   }

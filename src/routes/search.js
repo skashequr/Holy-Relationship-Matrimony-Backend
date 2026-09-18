@@ -47,25 +47,29 @@ router.get('/', optionalAuth, searchLimiter, async (req, res) => {
     const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     // Build query
-    const query = { status: 'approved', isActive: true };
+    const query = { status: 'approved', isActive: { $ne: false }, isMarried: { $ne: true } };
 
-    // Searching by biodata number is a direct lookup — anyone (including
-    // guests) can look up a specific profile this way, so skip the
-    // gender-pool restriction below.
+    // Inactive/banned owners stay hidden even for guests and direct number lookups.
+    const ownerFilter = { isActive: true, isBanned: false };
     if (biodataNumber) {
+      if (typeof biodataNumber !== 'string') return res.status(400).json({ success: false, message: 'Invalid biodata number' });
       query.biodataNumber = { $regex: `^${escapeRegex(biodataNumber.trim())}`, $options: 'i' };
-    } else {
-      // An explicit gender choice (from a guest or a logged-in user) wins;
-      // otherwise logged-in users default to the opposite gender, and
-      // guests without a preference see both genders.
-      const genderFilter = { isActive: true, isBanned: false };
-      if (gender === 'male' || gender === 'female') {
-        genderFilter.gender = gender;
-      } else if (req.user) {
-        genderFilter.gender = req.user.gender === 'male' ? 'female' : 'male';
+    } else if (gender === 'male' || gender === 'female') {
+      ownerFilter.gender = gender;
+    } else if (req.user) {
+      ownerFilter.gender = req.user.gender === 'male' ? 'female' : 'male';
+    }
+    const targetUsers = await User.find(ownerFilter).select('_id');
+    query.userId = { $in: targetUsers.map((user) => user._id) };
+
+    for (const value of [ageMin, ageMax]) {
+      if (value !== undefined && value !== '' &&
+          (typeof value !== 'string' || !Number.isInteger(Number(value)) || Number(value) < 18 || Number(value) > 100)) {
+        return res.status(400).json({ success: false, messageBn: 'বয়স ১৮ থেকে ১০০ বছরের মধ্যে হতে হবে।' });
       }
-      const targetUsers = await User.find(genderFilter).select('_id');
-      query.userId = { $in: targetUsers.map((u) => u._id) };
+    }
+    if (ageMin && ageMax && Number(ageMin) > Number(ageMax)) {
+      return res.status(400).json({ success: false, messageBn: 'সর্বনিম্ন বয়স সর্বোচ্চ বয়সের চেয়ে বেশি হতে পারবে না।' });
     }
 
     // Age filter

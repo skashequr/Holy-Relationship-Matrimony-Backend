@@ -205,6 +205,44 @@ router.post('/upload-photo', protect, upload.single('photo'), async (req, res) =
   }
 });
 
+// @route  GET /api/biodata/suggested
+// @desc   Get suggested matches based on own partner preferences
+// @access Private
+router.get('/suggested', protect, async (req, res) => {
+  try {
+    const myBiodata = await Biodata.findOne({ userId: req.user._id });
+    const oppositeGender = req.user.gender === 'male' ? 'female' : 'male';
+
+    const oppositeUsers = await User.find({ gender: oppositeGender, isActive: true, isBanned: false }).select('_id');
+    const userIds = oppositeUsers.map((u) => u._id);
+
+    const query = {
+      userId: { $in: userIds },
+      status: 'approved',
+      isMarried: { $ne: true },
+      isActive: true,
+    };
+
+    if (myBiodata?.partnerExpectations) {
+      const pe = myBiodata.partnerExpectations;
+      if (pe.ageMin || pe.ageMax) {
+        query['personal.age'] = {};
+        if (pe.ageMin) query['personal.age'].$gte = pe.ageMin;
+        if (pe.ageMax) query['personal.age'].$lte = pe.ageMax;
+      }
+    }
+
+    const profiles = await Biodata.find(query)
+      .populate('userId', 'name gender profilePicture isVerified verificationBadge')
+      .sort({ createdAt: -1 })
+      .limit(10);
+
+    res.json({ success: true, profiles: profiles.map((profile) => sanitizeBiodata(profile, req.user)) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // @route  GET /api/biodata/:id
 // @desc   Get biodata by biodata _id OR by userId (for viewing from payments page)
 // @access Private
@@ -250,7 +288,8 @@ router.get('/:id', protect, async (req, res) => {
 
     console.log('Gender check:', { biodataGender, viewerGender, hasUnlocked, isAdmin: viewer.role === 'admin' });
 
-    if (biodataGender === viewerGender && !hasUnlocked && viewer.role !== 'admin') {
+    const isOwner = String(biodata.userId._id) === String(viewer._id);
+    if (biodataGender === viewerGender && !isOwner && !hasUnlocked && viewer.role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'You can only view profiles of the opposite gender.',
@@ -259,8 +298,9 @@ router.get('/:id', protect, async (req, res) => {
     }
     const sanitized = sanitizeBiodata(biodata, viewer);
 
-    // Increment view count
-    await Biodata.findByIdAndUpdate(req.params.id, { $inc: { views: 1 } });
+    // Count actual biodata views, including lookups by owner id, but not self-views.
+    if (!isOwner) {
+    await Biodata.findByIdAndUpdate(biodata._id, { $inc: { views: 1 } });
 
     // Notify biodata owner of profile view
     await createNotification({
@@ -271,6 +311,7 @@ router.get('/:id', protect, async (req, res) => {
       message: 'Someone viewed your profile.',
       messageBn: 'কেউ আপনার প্রোফাইল দেখেছে।',
     });
+    }
 
     res.json({ success: true, biodata: sanitized });
   } catch (error) {
@@ -345,47 +386,10 @@ router.patch('/me/married', protect, async (req, res) => {
 
     res.json({
       success: true,
+      biodata: { _id: biodata._id, status: biodata.status, isActive: false, isMarried: true, biodataNumber: biodata.biodataNumber },
       message: 'Congratulations! Profile marked as married.',
       messageBn: 'আল্লাহুমা বারিক! বিয়ে হিসেবে চিহ্নিত হয়েছে।',
     });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
-// @route  GET /api/biodata/suggested
-// @desc   Get suggested matches based on own partner preferences
-// @access Private
-router.get('/suggested', protect, async (req, res) => {
-  try {
-    const myBiodata = await Biodata.findOne({ userId: req.user._id });
-    const oppositeGender = req.user.gender === 'male' ? 'female' : 'male';
-
-    const oppositeUsers = await User.find({ gender: oppositeGender }).select('_id');
-    const userIds = oppositeUsers.map((u) => u._id);
-
-    const query = {
-      userId: { $in: userIds },
-      status: 'approved',
-      isMarried: { $ne: true },
-      isActive: true,
-    };
-
-    if (myBiodata?.partnerExpectations) {
-      const pe = myBiodata.partnerExpectations;
-      if (pe.ageMin || pe.ageMax) {
-        query['personal.age'] = {};
-        if (pe.ageMin) query['personal.age'].$gte = pe.ageMin;
-        if (pe.ageMax) query['personal.age'].$lte = pe.ageMax;
-      }
-    }
-
-    const profiles = await Biodata.find(query)
-      .populate('userId', 'name gender profilePicture isVerified verificationBadge')
-      .sort({ createdAt: -1 })
-      .limit(10);
-
-    res.json({ success: true, profiles });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Server error' });
   }

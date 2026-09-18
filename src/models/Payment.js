@@ -58,6 +58,13 @@ const paymentSchema = new mongoose.Schema(
     },
     refundedAt: Date,
     refundReason: String,
+    // Set only when an admin has manually confirmed this transaction against
+    // their real bKash/Nagad statement and deliberately reported it to
+    // Google/Facebook as an ad conversion. Kept separate from `status` since
+    // there is no payment gateway verifying transactions automatically —
+    // approving a payment (to unlock contact) does not by itself mean the
+    // transaction should be trusted as a genuine ad-attributed sale.
+    adConversionTrackedAt: { type: Date, default: null },
   },
   {
     timestamps: true,

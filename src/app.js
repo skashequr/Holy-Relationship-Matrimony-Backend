@@ -21,6 +21,7 @@ const messageRoutes = require('./routes/message');
 const reviewRoutes = require('./routes/review');
 const ruqyahRoutes = require('./routes/ruqyah');
 const referralRoutes = require('./routes/referral');
+const settingsRoutes = require('./routes/settings');
 const { apiLimiter } = require('./middleware/rateLimiter');
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -170,6 +171,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/ruqyah', ruqyahRoutes);
 app.use('/api/referral', referralRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // ── Health check ───────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
