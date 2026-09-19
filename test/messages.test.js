@@ -11,7 +11,7 @@ function load(relative, mocks) {
   const filename = path.resolve(__dirname, '..', relative);
   const native = createRequire(filename);
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, require: key => mocks[key] || native(key), process, console, Date });
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, require: key => mocks[key] || native(key), process, console, Date, setTimeout, clearTimeout });
   return module.exports;
 }
 function query(data) { return { populate() { return this; }, select() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, then(resolve, reject) { return Promise.resolve(data).then(resolve, reject); } }; }

@@ -17,6 +17,10 @@ function setupMessageSocket(io) {
   io.on('connection', socket => {
     const userId = socket.userId;
     socket.join(userId);
+    // Force a fresh authenticated handshake when the access token expires.
+    const expiryTimer = socket.tokenExpiry ? setTimeout(() => socket.disconnect(true),
+      Math.min(2147483647, Math.max(0, socket.tokenExpiry * 1000 - Date.now()))) : null;
+    socket.on('disconnect', () => { if (expiryTimer) clearTimeout(expiryTimer); });
     const validId = id => typeof id === 'string' && /^[a-f\d]{24}$/i.test(id);
     const allowed = async id => {
       if (!validId(id)) return false;
