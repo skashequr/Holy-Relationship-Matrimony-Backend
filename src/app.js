@@ -170,6 +170,8 @@ app.use('/api/interests', interestRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/ruqyah', ruqyahRoutes);
+app.use('/api/counseling', require('./routes/counseling'));
+app.use('/api/face-verification', require('./routes/faceVerification').router);
 app.use('/api/referral', referralRoutes);
 app.use('/api/settings', settingsRoutes);
 

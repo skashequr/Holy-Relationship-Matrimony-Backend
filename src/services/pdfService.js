@@ -2,7 +2,7 @@ const PDFDocument = require('pdfkit');
 const path = require('path');
 const fs = require('fs');
 
-const FONT_PATH = path.join(__dirname, '../../fonts/SolaimanLipi.ttf');
+const FONT_PATH = path.join(__dirname, '../../fonts/NotoSansBengali.ttf');
 
 async function generateBiodataPDF(biodata) {
   return new Promise((resolve, reject) => {

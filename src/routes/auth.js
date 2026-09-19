@@ -433,7 +433,7 @@ router.post('/logout', protect, async (req, res) => {
 });
 
 // @route  POST /api/auth/refresh-token
-// @desc   Refresh access token using refresh token from cookie
+// @desc   Refresh access token using refresh token from request body or cookie
 // @access Public
 router.post('/refresh-token', async (req, res) => {
   const refreshToken = req.body.refreshToken || req.cookies?.refreshToken;
@@ -452,7 +452,10 @@ router.post('/refresh-token', async (req, res) => {
     const newAccessToken = generateAccessToken(user._id);
     res.json({ success: true, token: newAccessToken });
   } catch (error) {
-    res.status(401).json({ success: false, message: 'Refresh token expired or invalid.' });
+    if (['JsonWebTokenError', 'TokenExpiredError', 'NotBeforeError'].includes(error.name)) {
+      return res.status(401).json({ success: false, message: 'Refresh token expired or invalid.' });
+    }
+    res.status(500).json({ success: false, message: 'Unable to refresh session. Please try again.' });
   }
 });
 

@@ -119,6 +119,8 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    faceVerificationStatus: { type: String, enum: ['none', 'pending', 'approved', 'rejected'], default: 'none' },
+    faceVerificationImage: { type: Buffer, select: false },
     faceVerificationPhoto: {
       type: String,
       default: null,

@@ -144,63 +144,7 @@ router.delete('/account', protect, async (req, res) => {
   }
 });
 
-// @route  POST /api/user/face-verify
-// @desc   Submit selfie for face verification — auto-verifies the account
-// @access Private
-router.post('/face-verify', protect, upload.single('photo'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'No photo uploaded.', messageBn: 'কোনো ছবি আপলোড করা হয়নি।' });
-    }
-
-    const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
-
-    if (user.isFaceVerified) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      return res.json({ success: true, message: 'Already face verified.', messageBn: 'ইতিমধ্যে যাচাই করা হয়েছে।' });
-    }
-
-    let photoUrl = null;
-    if (process.env.CLOUDINARY_CLOUD_NAME) {
-      try {
-        const result = await cloudinary.uploader.upload(req.file.path, {
-          folder: 'holy-matrimony/face-verifications',
-          width: 400,
-          height: 400,
-          crop: 'fill',
-          quality: 'auto',
-        });
-        photoUrl = result.secure_url;
-      } catch (err) {
-        console.error('Cloudinary face upload error:', err.message);
-      }
-    }
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-
-    await User.findByIdAndUpdate(req.user._id, {
-      isFaceVerified: true,
-      faceVerificationPhoto: photoUrl,
-      isVerified: true,
-      verificationBadge: true,
-    });
-
-    await Notification.create({
-      userId: req.user._id,
-      type: 'system',
-      title: 'Face Verification Successful',
-      titleBn: 'ফেস যাচাই সম্পন্ন',
-      message: 'Your account has been verified via face verification.',
-      messageBn: 'আপনার অ্যাকাউন্ট ফেস যাচাইয়ের মাধ্যমে স্বয়ংক্রিয়ভাবে যাচাই হয়েছে।',
-      isRead: false,
-    });
-
-    res.json({ success: true, message: 'Face verified successfully.', messageBn: 'ফেস যাচাই সফল হয়েছে। আপনার অ্যাকাউন্ট যাচাই হয়েছে।' });
-  } catch (error) {
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-    console.error('POST /api/user/face-verify error:', error.message);
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
+// Submit a selfie for administrator review.
+router.post('/face-verify', protect, upload.single('photo'), require('./faceVerification').submit);
 
 module.exports = router;

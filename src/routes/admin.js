@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const crypto = require('crypto');
 
 const User = require('../models/User');
 const Biodata = require('../models/Biodata');
@@ -175,103 +174,30 @@ router.get('/users', protect, adminOnly, async (req, res) => {
   }
 });
 
-// @route  POST /api/admin/users
-// @desc   Admin creates a new user directly from JSON data. If no password
-//         is given, one is generated; the credentials are then emailed to
-//         the new user's address.
+const { createMember, createMemberBiodata, sendLoginEmail } = require('../services/adminMemberService');
+function memberError(res, error) {
+  const status = error.code === 11000 ? 409 : error.status || (['ValidationError', 'CastError'].includes(error.name) ? 400 : 500);
+  return res.status(status).json({ success: false, message: error.code === 11000 ? 'এই ইমেইল, ফোন বা সদস্যের বায়োডাটা ইতিমধ্যে আছে।' : status === 500 ? 'সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।' : error.message });
+}
 router.post('/users', async (req, res) => {
   try {
-    const { name, email, phone, gender, password, role } = req.body;
-
-    if (!name || !email || !gender) {
-      return res.status(400).json({ success: false, message: 'name, email এবং gender দিতে হবে।' });
-    }
-    if (!['male', 'female'].includes(gender)) {
-      return res.status(400).json({ success: false, message: 'gender অবশ্যই male অথবা female হতে হবে।' });
-    }
-
-    const normalizedEmail = email.toLowerCase().trim();
-    const existingUser = await User.findOne({
-      $or: [{ email: normalizedEmail }, ...(phone ? [{ phone }] : [])],
-    });
-    if (existingUser) {
-      const field = existingUser.email === normalizedEmail ? 'email' : 'phone';
-      return res.status(400).json({
-        success: false,
-        message: `এই ${field === 'email' ? 'ইমেইল' : 'ফোন'} দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট আছে।`,
-      });
-    }
-
-    const generatedPassword = password || crypto.randomBytes(6).toString('base64url');
-
-    const user = await User.create({
-      name,
-      email: normalizedEmail,
-      phone: phone || undefined,
-      gender,
-      password: generatedPassword,
-      role: role === 'admin' ? 'admin' : 'user',
-      isVerified: true,
-      isEmailVerified: true,
-    });
-
-    const emailHtml = `
-      <!DOCTYPE html><html><head><meta charset="UTF-8">
-      <style>
-        body{font-family:Arial,sans-serif;background:#f4f4f4;margin:0;padding:20px}
-        .wrap{max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden}
-        .head{background:linear-gradient(135deg,#1a5276,#2e86c1);padding:30px;text-align:center}
-        .head h1{color:#fff;margin:0;font-size:22px}
-        .head p{color:#cce4ff;margin:6px 0 0}
-        .body{padding:30px}
-        .creds{background:#f4f4f4;border-radius:8px;padding:16px;margin:16px 0;font-size:15px}
-        .btn{display:inline-block;margin-top:20px;padding:14px 32px;background:#c9a84c;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-size:15px}
-        .foot{background:#f4f4f4;padding:16px;text-align:center;font-size:12px;color:#888}
-      </style></head>
-      <body><div class="wrap">
-        <div class="head"><h1>Holy Relationship Matrimony</h1><p>হোলি রিলেশনশিপ ম্যাট্রিমনি</p></div>
-        <div class="body">
-          <p>প্রিয় <strong>${name}</strong>,</p>
-          <p>অ্যাডমিন আপনার জন্য একটি অ্যাকাউন্ট তৈরি করেছেন। নিচে আপনার লগইন তথ্য দেওয়া হলো:</p>
-          <div class="creds">
-            <p style="margin:4px 0"><strong>ইমেইল:</strong> ${user.email}</p>
-            <p style="margin:4px 0"><strong>পাসওয়ার্ড:</strong> ${generatedPassword}</p>
-          </div>
-          <p>নিরাপত্তার জন্য লগইন করার পর অনুগ্রহ করে পাসওয়ার্ড পরিবর্তন করুন।</p>
-          <a href="https://www.holymarriagemedia.com/login" class="btn">লগইন করুন</a>
-        </div>
-        <div class="foot">© Holy Relationship Matrimony — Bangladesh Islamic Matrimony Service</div>
-      </div></body></html>
-    `;
-
-    const emailResult = await sendEmail({
-      to: user.email,
-      subject: '[Holy Matrimony] আপনার অ্যাকাউন্ট তৈরি হয়েছে',
-      html: emailHtml,
-    });
-
-    res.status(201).json({
-      success: true,
-      message: emailResult.success
-        ? 'ইউজার তৈরি হয়েছে এবং পাসওয়ার্ড ইমেইলে পাঠানো হয়েছে।'
-        : 'ইউজার তৈরি হয়েছে কিন্তু ইমেইল পাঠাতে ব্যর্থ হয়েছে।',
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        gender: user.gender,
-        role: user.role,
-      },
-      emailSent: emailResult.success,
-    });
-  } catch (error) {
-    console.error('POST /api/admin/users error:', error.message);
-    if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: 'এই ইমেইল বা ফোন নম্বর দিয়ে ইতিমধ্যে অ্যাকাউন্ট আছে।' });
-    }
-    res.status(500).json({ success: false, message: 'Server error', error: error.message });
-  }
+    const result = await createMember(req.body);
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { memberError(res, error); }
+});
+router.post('/users/:id/biodata', async (req, res) => {
+  try {
+    const biodata = await createMemberBiodata(req.params.id, req.body);
+    res.status(201).json({ success: true, biodata });
+  } catch (error) { memberError(res, error); }
+});
+router.post('/users/:id/login-email', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: 'সদস্য পাওয়া যায়নি।' });
+    const emailSent = await sendLoginEmail(user);
+    res.status(emailSent ? 200 : 502).json({ success: emailSent, emailSent, message: emailSent ? 'লগইন ও পাসওয়ার্ড সেট করার নির্দেশনা পাঠানো হয়েছে।' : 'ইমেইল পাঠানো যায়নি। ইমেইল সেটিংস পরীক্ষা করে আবার চেষ্টা করুন।' });
+  } catch (error) { memberError(res, error); }
 });
 
 // @route  PUT /api/admin/users/:id/ban

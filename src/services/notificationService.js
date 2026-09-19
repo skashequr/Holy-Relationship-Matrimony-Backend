@@ -1,10 +1,18 @@
 const Notification = require('../models/Notification');
 const nodemailer = require('nodemailer');
+const tls = require('node:tls');
+
+// Use the OS trust store as well as Node's bundled roots when supported.
+// Certificate verification remains enabled (including on managed Windows PCs).
+const smtpTls = typeof tls.getCACertificates === 'function'
+  ? { ca: [...tls.getCACertificates('default'), ...tls.getCACertificates('system')] }
+  : undefined;
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: process.env.SMTP_PORT,
-  secure: false,
+  secure: Number(process.env.SMTP_PORT) === 465,
+  tls: smtpTls,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,

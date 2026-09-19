@@ -50,6 +50,9 @@ const protect = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
+    if (!['JsonWebTokenError', 'TokenExpiredError', 'NotBeforeError'].includes(error.name)) {
+      return res.status(500).json({ success: false, message: 'Unable to verify session. Please try again.' });
+    }
     return res.status(401).json({
       success: false,
       message: 'Token is invalid or expired.',

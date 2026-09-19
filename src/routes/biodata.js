@@ -423,7 +423,7 @@ router.get('/:id/download', protect, async (req, res) => {
     const { generateBiodataPDF } = require('../services/pdfService');
     const pdfBuffer = await generateBiodataPDF(biodata);
 
-    const filename = `biodata-${biodata.personal?.fullName || biodata._id}.pdf`;
+    const filename = `biodata-${biodata._id}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(pdfBuffer);

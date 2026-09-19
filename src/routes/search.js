@@ -80,6 +80,15 @@ router.get('/', optionalAuth, searchLimiter, async (req, res) => {
     }
 
     // Height filter
+    for (const value of [heightMin, heightMax]) {
+      if (value !== undefined && value !== '' &&
+          (typeof value !== 'string' || !Number.isFinite(Number(value)) || Number(value) < 100 || Number(value) > 250)) {
+        return res.status(400).json({ success: false, messageBn: 'উচ্চতা ১০০ থেকে ২৫০ সেমির মধ্যে হতে হবে।' });
+      }
+    }
+    if (heightMin && heightMax && Number(heightMin) > Number(heightMax)) {
+      return res.status(400).json({ success: false, messageBn: 'সর্বনিম্ন উচ্চতা সর্বোচ্চ উচ্চতার চেয়ে বেশি হতে পারবে না।' });
+    }
     if (heightMin || heightMax) {
       query['personal.height'] = {};
       if (heightMin) query['personal.height'].$gte = Number(heightMin);
@@ -137,7 +146,7 @@ router.get('/', optionalAuth, searchLimiter, async (req, res) => {
     const safeSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
 
     const skip = (page - 1) * limit;
-    const sortObj = { [safeSortBy]: sortOrder === 'asc' ? 1 : -1 };
+    const sortObj = { [safeSortBy]: sortOrder === 'asc' ? 1 : -1, _id: sortOrder === 'asc' ? 1 : -1 };
 
     const [biodatas, total] = await Promise.all([
       Biodata.find(query)
